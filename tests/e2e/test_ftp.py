@@ -1,10 +1,15 @@
 """Test the basic functions of the FTP client
 
-Currently only tests whatever is needed for pyxboxtest
+Currently only tests whatever is needed for pyxboxtest.
+
+Note: all of these tests just use a blank HDD as the starting point as
+internally pyxboxtest uses this FTP app to create HDDs with extra content
 """
-from ftplib import FTP
+from ftplib import FTP, error_perm
+from io import BytesIO
 import random
 import string
+from typing import List, NamedTuple, Tuple
 import os
 
 import git
@@ -23,63 +28,232 @@ _BLANK_HDD_DRIVES = (
 )
 
 
-@pytest.fixture
-def ftp_app(xqemu_blank_hdd_template: XQEMUHDDTemplate):
+@pytest.fixture(scope="session")
+def og_xbox_ftp_iso() -> str:
+    """:returns: the location of the OG Xbox FTP ISO"""
     repo = git.Repo(".", search_parent_directories=True)
+    return os.path.join(repo.working_tree_dir, "OGXboxFTP.iso")
+
+
+@pytest.fixture
+def ftp_app(og_xbox_ftp_iso: str, xqemu_blank_hdd_template: XQEMUHDDTemplate):
+    """Fixture that gives an instance of XQEMU with a blank HDD running OG
+    Xbox FTP
+    """
     with XQEMUXboxAppRunner(
         hdd_filename=xqemu_blank_hdd_template.create_fresh_hdd(),
-        dvd_filename=os.path.join(repo.working_tree_dir, "OGXboxFTP.iso"),
+        dvd_filename=og_xbox_ftp_iso,
     ) as app:
         yield app
 
 
 @pytest.fixture
-def ftp_client(ftp_app: XQEMUXboxAppRunner) -> FTP:
-    return ftp_app.get_ftp_client("xbox", "xbox")
+def ftp_client(ftp_app: XQEMUXboxAppRunner):
+    """Fixture that gives an ftp client connected to an instance of OG Xbox
+    FTP
+    """
+    yield ftp_app.get_ftp_client("xbox", "xbox")
 
 
 def test_ftp_app_init(ftp_client: FTP):
+    """Ensures that initial conditions of the FTP server are correct by
+    checking that we are in the root directory and that we can see all the HDD
+    partitions
+    """
     assert ftp_client.pwd() == "/", "Initially in root dir"
     assert ftp_client.nlst() == list(_BLANK_HDD_DRIVES), "Initially in root dir"
 
 
-@pytest.mark.parametrize("cwd", _BLANK_HDD_DRIVES)
+@pytest.mark.parametrize("cwd", (x for x in _BLANK_HDD_DRIVES if x != "F"))
 def test_ftp_app_set_cwd_valid(ftp_client: FTP, cwd: str):
+    """Sets a valid current working directory"""
     ftp_client.cwd(cwd)
     assert ftp_client.pwd() == "/" + cwd + "/", "Changed directory"
     assert ftp_client.nlst() == [], "Nothing in here!"
 
 
-@pytest.mark.parametrize("cwd", _BLANK_HDD_DRIVES)
-def test_ftp_app_set_cwd_valid(ftp_client: FTP, cwd: str):
-    ftp_client.cwd(cwd)
-    assert ftp_client.pwd() == "/" + cwd + "/", "Changed directory"
-    assert ftp_client.nlst() == [], "Nothing in here!"
+@pytest.mark.parametrize("cwd", ("lol", "thing", "test"))
+def test_ftp_app_set_cwd_invalid(ftp_client: FTP, cwd: str):
+    """Sets an invalid current working directory"""
+    with pytest.raises(error_perm):
+        ftp_client.cwd(cwd)
+    assert ftp_client.pwd() == "/", "Not changed directory"
 
 
-def random_string(str_size: int, allowed_chars: str) -> str:
-    return "".join(random.choice(allowed_chars) for x in range(str_size))
+def create_random_string() -> str:
+    """Gives us some random string"""
+    allowed_chars = string.ascii_letters + string.punctuation
+    str_size = random.randint(1, 100)
+    rand_str = r"".join(random.choice(allowed_chars) for x in range(str_size))
+
+    return rand_str
+
+
+def ftp_upload_data(ftp_client: FTP, data: str, remote_filename: str) -> None:
+    """Uploads the given string as a file to the FTP server"""
+    data_reader = BytesIO(data.encode("utf8"))
+    ftp_client.storbinary(f"STOR {remote_filename}", data_reader)
+
+
+def ftp_get_file_content(ftp_client: FTP, remote_filename: str) -> str:
+    """:returns: the contents of a file from the FTP server"""
+    data = BytesIO()
+    ftp_client.retrbinary(f"RETR {remote_filename}", data.write)
+    data.seek(0)
+    return data.read().decode("utf8")
+
+
+def ftp_generate_and_upload_random_files(
+    ftp_client: FTP, remote_filenames: Tuple[str]
+) -> List[str]:
+    """Generates random text files and uploads them via FTP.
+    :param remote_filenames: the filenames for the randomly generated files. \
+        One file is generated per name
+    :returns: the contents of the files that were uploaded
+    """
+    file_contents = []
+    for remote_filename in remote_filenames:
+        random_string = create_random_string()
+        file_contents.append(random_string)
+        ftp_upload_data(ftp_client, random_string, remote_filename)
+
+    return file_contents
+
+
+def ftp_assert_files_have_contents(
+    ftp_client, file_contents: List[str], remote_filenames: Tuple[str]
+) -> None:
+    """Check that the files on the FTP server have the right content"""
+    for i, remote_filename in enumerate(remote_filenames):
+        assert file_contents[i] == ftp_get_file_content(
+            ftp_client, remote_filename
+        ), "File downloaded successfully"
 
 
 @pytest.mark.parametrize(
-    "dest_filename", ("C/something.bat", "X/test.cpp", "E/test.txt", "F/file.txt")
+    "remote_filenames",
+    (
+        ("C/thing.bat",),
+        ("C/tst.txt", "Y/other.bat"),
+        # ("F/tst.txt",),
+        ("C/something.bat", "X/test.cpp", "E/test.txt"),
+    ),
 )
-def test_ftp_app_upload_file(ftp_client: FTP, dest_filename: str, tmp_path_factory):
-    temp_file_dir = tmp_path_factory.mktemp("files")
-    local_filename = os.path.join(temp_file_dir, "local_file.txt")
-    with open(local_filename, "w") as local_file:
-        allowed_chars = string.ascii_letters + string.punctuation
-        str_size = random.randint(1, 100)
-        rand_str = random_string(str_size, allowed_chars)
-        local_file.write(rand_str)
+def test_ftp_app_upload_download_data(
+    og_xbox_ftp_iso: str,
+    remote_filenames: Tuple[str],
+    xqemu_blank_hdd_template: XQEMUHDDTemplate,
+):
+    """Uploads random files (one for each filename) and then downloads them
+    and compares the contents to what was uploaded to ensure that they were
+    uploaded correctly.
 
-    with open(local_filename, "rb") as local_file:
-        ftp_client.storbinary(f"STOR {dest_filename}", local_file)
+    After this the FTP is shutdown a second instance is started to repeat the
+    download and compare operation to make sure that the files were actually
+    stored on the HDD and not just in memory.
+    """
+    hdd_filename = xqemu_blank_hdd_template.create_fresh_hdd()
 
-    compare_local_to_filename = local_filename + "2"
-    with open(compare_local_to_filename, "wb") as compare_local_to_file:
-        ftp_client.retrbinary(f"RETR {dest_filename}", compare_local_to_file.write)
+    with XQEMUXboxAppRunner(
+        hdd_filename=hdd_filename, dvd_filename=og_xbox_ftp_iso
+    ) as app:
+        ftp = app.get_ftp_client("xbox", "xbox")
+        file_contents = ftp_generate_and_upload_random_files(ftp, remote_filenames)
 
-    assert (
-        open(local_filename).read() == open(compare_local_to_filename).read()
-    ), "File uploaded and downloaded successfully"
+        # Files uploaded successfully
+        ftp_assert_files_have_contents(ftp, file_contents, remote_filenames)
+
+    # Create a new app to test that they are actually stored on the HDD and not
+    # just in memory
+    with XQEMUXboxAppRunner(
+        hdd_filename=hdd_filename, dvd_filename=og_xbox_ftp_iso
+    ) as app:
+        ftp_assert_files_have_contents(
+            app.get_ftp_client("xbox", "xbox"), file_contents, remote_filenames
+        )
+
+
+class ListDirectoryParams(NamedTuple):
+    list_directory: str
+    expected_content: Tuple[str, ...]
+
+
+class MakeDirectoryParams(NamedTuple):
+    make_directories: Tuple[str, ...]
+    create_files: Tuple[str, ...]
+    run_these_list_tests: Tuple[ListDirectoryParams, ...]
+
+
+@pytest.mark.parametrize(
+    "directories_to_make",
+    (
+        MakeDirectoryParams(
+            ("C/test", "C/other"),
+            tuple(),
+            (ListDirectoryParams("/C/", ("test", "other")),),
+        ),
+        MakeDirectoryParams(
+            ("C/test", "C/test/other"),
+            ("E/test.txt", "C/test/other/file"),
+            (
+                ListDirectoryParams("/C/", ("test",)),
+                ListDirectoryParams("/C/test/", ("other",)),
+                ListDirectoryParams("/C/test/other/", ("file",)),
+                ListDirectoryParams("/E/", ("test.txt",)),
+            ),
+        ),
+        MakeDirectoryParams(
+            ("C/test", "C/other"),
+            ("C/file1", "C/other/file2"),
+            (
+                ListDirectoryParams("/C/", ("test", "other", "file1")),
+                ListDirectoryParams("/C/other/", ("file2",)),
+            ),
+        ),
+    ),
+)
+def test_make_and_list_directory(
+    ftp_client: FTP, directories_to_make: MakeDirectoryParams
+):
+    """Ensures that we can make directories and see them"""
+    for directory in directories_to_make.make_directories:
+        ftp_client.mkd(directory)
+
+    for filename in directories_to_make.create_files:
+        ftp_upload_data(ftp_client, "", filename)
+
+    for list_test_to_run in directories_to_make.run_these_list_tests:
+        assert (
+            tuple(ftp_client.nlst(list_test_to_run.list_directory))
+            == list_test_to_run.expected_content
+        )
+
+
+class DeleteFileParams(NamedTuple):
+    """May need to make some directories if we are to be sure that the upload
+    was a success
+    """
+
+    make_directories: Tuple[str, ...]
+    filename: str
+    directory_to_check: str
+
+
+@pytest.mark.parametrize(
+    "delete_file_params",
+    (
+        DeleteFileParams(tuple(), "C/test.txt", "/C/"),
+        DeleteFileParams(tuple(), "E/test2.txt", "/E/"),
+        DeleteFileParams(
+            ("X/dir", "X/dir/dir2"), "X/dir/dir2/test2.txt", "/X/dir/dir2/"
+        ),
+    ),
+)
+def test_delete_file(ftp_client: FTP, delete_file_params: DeleteFileParams):
+    for directory in delete_file_params.make_directories:
+        ftp_client.mkd(directory)
+
+    ftp_upload_data(ftp_client, "", delete_file_params.filename)
+    ftp_client.delete(delete_file_params.filename)
+
+    assert ftp_client.nlst(delete_file_params.directory_to_check) == []

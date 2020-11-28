@@ -1,3 +1,4 @@
+#include <array>
 #include <iostream>
 #include <iomanip>
 #include <string>
@@ -36,33 +37,45 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-bool nxIsDriveMounted(char) { return true; }
+namespace
+{
+  bool nxIsDriveMounted(char) { return true; }
+} // namespace
 #endif
 
-const std::string drives = "CDEFGXYZ";
+namespace
+{
+  // Set buffer sizes to 1KiB for commands and 64KiB for data
+  // Command buffer should selldom (never?) exceed 512B but I prefer a little headroom.
+  // Data buffer is bigger in order for disk writes to be quicker - writing bigger
+  // chunks is usually preferable for a myriad of reasons.
+  constexpr size_t k_ftp_cmd_buffer_size = 1024;
+  constexpr size_t k_ftp_data_buffer_size = 64 * 1024;
 
-const std::string types[] = {
-    "ASCII",
-    "EBCDIC",
-    "IMAGE",
-    "LOCAL"};
+  const std::array<const char, 8> k_drives{'C', 'D', 'E', 'F', 'G', 'X', 'Y', 'Z'};
 
-const std::string replies[] = {
-    "220 Please enter your login name now.\r\n",
-    "331 Password required.\r\n",
-    "230 User logged in, proceed.\r\n",
-    "257 \"%s\" is current directory\r\n",
-    "502 %s not implemented.\r\n",
-    "200 Type set to %s\r\n",
-    "250 \"%s\" is current directory.\r\n",
-    "215 UNIX type: L8\r\n",
-    "200 Port command ok.\r\n",
-    "150 Opening ASCII data connection for ls\r\n",
-    "226 Data transfer finished successfully. Data connection closed.\r\n",
-    "504 Command parameter not implemented.\r\n",
-    "250 Requested file action ok.\r\n",
-    "553 Requested action not taken.\r\n",
-    "530 Not logged in.\r\n"};
+  const std::array<const std::string, 4> k_types{
+      "ASCII",
+      "EBCDIC",
+      "IMAGE",
+      "LOCAL"};
+
+  constexpr char k_reply_please_login[] = "220 Please enter your login name now.\r\n";
+  constexpr char k_reply_password_required[] = "331 Password required.\r\n";
+  constexpr char k_reply_user_logged_in[] = "230 User logged in, proceed.\r\n";
+  constexpr char k_reply_format_current_directory_pwd[] = "257 \"%s\" is current directory\r\n";
+  constexpr char k_reply_not_implemented[] = "502 %s not implemented.\r\n";
+  constexpr char k_reply_format_type_set_to[] = "200 Type set to %s\r\n";
+  constexpr char k_reply_format_current_directory_cwd[] = "250 \"%s\" is current directory.\r\n";
+  constexpr char k_reply_unix_type_l8[] = "215 UNIX type: L8\r\n";
+  constexpr char k_reply_port_command_ok[] = "200 Port command ok.\r\n";
+  constexpr char k_reply_opening_ascii_data_connection_for_ls[] = "150 Opening ASCII data connection for ls\r\n";
+  constexpr char k_reply_data_transfer_finished_successfully[] = "226 Data transfer finished successfully. Data connection closed.\r\n";
+  constexpr char k_reply_command_parameter_not_implemented[] = "504 Command parameter not implemented.\r\n";
+  constexpr char k_reply_file_action_ok[] = "250 Requested file action ok.\r\n";
+  constexpr char k_reply_action_not_taken[] = "553 Requested action not taken.\r\n";
+  constexpr char k_reply_not_logged_in[] = "530 Not logged in.\r\n";
+} // namespace
 
 void ftpConnection::sendStdString(std::string const &s, int flags = 0)
 {
@@ -74,31 +87,30 @@ void ftpConnection::sendStdString(int fd, std::string const &s, int flags = 0)
   send(fd, s.c_str(), s.length(), flags);
 }
 
-ftpConnection::ftpConnection(int fd, ftpServer *s) : _fd(fd), server(s)
+ftpConnection::ftpConnection(int fd, ftpServer *s) : buf(new char[k_ftp_cmd_buffer_size]), // Unfortunately make_unique doesn't seem to exist in the NXDK
+                                                     _fd(fd), server(s)
 {
-  buf = (char *)malloc(FTP_CMD_BUFFER_SIZE);
   pwd = "/";
   logged_in = false;
-  sendStdString(replies[0]);
+  sendStdString(k_reply_please_login);
   mode = 'I';
 }
 
 ftpConnection::~ftpConnection()
 {
-  free(buf);
   server = nullptr;
 }
 
 bool ftpConnection::update(void)
 {
   // Might as well kill the connection if buffer memory allocation failed.
-  if (buf == nullptr)
+  if (!buf)
   {
     return false;
   }
   // handle data from a client
   int nbytes;
-  if ((nbytes = recv(_fd, buf, FTP_CMD_BUFFER_SIZE, 0)) <= 0)
+  if ((nbytes = recv(_fd, buf.get(), k_ftp_cmd_buffer_size, 0)) <= 0)
   {
     // got error or connection closed by client
     if (nbytes == 0)
@@ -147,7 +159,7 @@ bool ftpConnection::update(void)
      * / TYPE - set transfer type (Only accepts IMAGE and ASCII)
      * X USER - send username
      **/
-    std::string recvdata(buf);
+    std::string recvdata(buf.get());
     size_t cmdDataSep = recvdata.find(' ', 0);
     std::string arg = " ";
     if (cmdDataSep == std::string::npos)
@@ -275,7 +287,7 @@ bool ftpConnection::update(void)
     }
     else
     {
-      sendStdString(replies[14]);
+      sendStdString(k_reply_not_logged_in);
     }
   }
   /* Tell the server that we're still alive and kicking! */
@@ -286,7 +298,7 @@ void ftpConnection::cmdUser(std::string const &arg)
 {
   if (!arg.compare(server->conf->getUser()))
   {
-    sendStdString(replies[1]);
+    sendStdString(k_reply_password_required);
   }
   else
   {
@@ -298,7 +310,7 @@ void ftpConnection::cmdPass(std::string const &arg)
 {
   if (!arg.compare(server->conf->getPassword()))
   {
-    sendStdString(replies[2]);
+    sendStdString(k_reply_user_logged_in);
     logged_in = true;
   }
   else
@@ -309,27 +321,27 @@ void ftpConnection::cmdPass(std::string const &arg)
 
 void ftpConnection::cmdPwd(void)
 {
-  sprintf(buf, replies[3].c_str(), pwd.c_str());
-  sendStdString(buf);
+  sprintf(buf.get(), k_reply_format_current_directory_pwd, pwd.c_str());
+  sendStdString(buf.get());
 }
 
 void ftpConnection::cmdType(std::string const &arg)
 {
   if (arg[0] == 'I')
   {
-    sprintf(buf, replies[5].c_str(), "IMAGE");
-    sendStdString(buf);
+    sprintf(buf.get(), k_reply_format_type_set_to, "IMAGE");
+    sendStdString(buf.get());
     mode = 'I';
   }
   else if (arg[0] == 'A')
   {
-    sprintf(buf, replies[5].c_str(), "ASCII");
-    sendStdString(buf);
+    sprintf(buf.get(), k_reply_format_type_set_to, "ASCII");
+    sendStdString(buf.get());
     mode = 'A';
   }
   else
   {
-    sendStdString(replies[11]);
+    sendStdString(k_reply_command_parameter_not_implemented);
   }
 }
 
@@ -364,25 +376,25 @@ void ftpConnection::cmdCwd(std::string const &arg)
                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)) != INVALID_HANDLE_VALUE)
     {
       pwd = tmpPwd;
-      sprintf(buf, replies[6].c_str(), pwd.c_str());
-      sendStdString(buf);
+      sprintf(buf.get(), k_reply_format_current_directory_cwd, pwd.c_str());
+      sendStdString(buf.get());
     }
     else
     {
-      sendStdString(replies[14]);
+      sendStdString(k_reply_not_logged_in);
     }
     CloseHandle(soughtFolder);
   }
   else
   {
     pwd = "/";
-    sprintf(buf, replies[6].c_str(), pwd.c_str());
-    sendStdString(buf);
+    sprintf(buf.get(), k_reply_format_current_directory_cwd, pwd.c_str());
+    sendStdString(buf.get());
   }
 #else
   pwd = tmpPwd;
-  sprintf(buf, replies[6].c_str(), pwd.c_str());
-  sendStdString(buf);
+  sprintf(buf.get(), k_reply_format_current_directory_cwd, pwd.c_str());
+  sendStdString(buf.get());
 #endif
 }
 
@@ -397,11 +409,11 @@ void ftpConnection::cmdDele(std::string const &arg)
   fileName = unixToDosPath(fileName);
   if (DeleteFile(fileName.c_str()))
   {
-    sendStdString(replies[12]);
+    sendStdString(k_reply_file_action_ok);
   }
   else
   {
-    sendStdString(replies[13]);
+    sendStdString(k_reply_action_not_taken);
   }
 #else
   cmdUnimplemented("DELE");
@@ -415,7 +427,7 @@ void ftpConnection::cmdCdup(void)
 
 void ftpConnection::cmdSyst(void)
 {
-  sendStdString(replies[7]);
+  sendStdString(k_reply_unix_type_l8);
 }
 
 void ftpConnection::cmdPort(std::string const &arg)
@@ -438,7 +450,7 @@ void ftpConnection::cmdPort(std::string const &arg)
   dataFd = server->openConnection(address, port);
   if (dataFd != -1)
   {
-    sendStdString(replies[8]);
+    sendStdString(k_reply_port_command_ok);
   }
   else
   {
@@ -457,11 +469,11 @@ void ftpConnection::cmdMkd(std::string const &arg)
   fileName = unixToDosPath(fileName);
   if (CreateDirectoryA(fileName.c_str(), NULL))
   {
-    sendStdString(replies[12]);
+    sendStdString(k_reply_file_action_ok);
   }
   else
   {
-    sendStdString(replies[13]);
+    sendStdString(k_reply_action_not_taken);
   }
 #else
   cmdUnimplemented("MKD");
@@ -479,11 +491,11 @@ void ftpConnection::cmdRmd(std::string const &arg)
   fileName = unixToDosPath(fileName);
   if (RemoveDirectoryA(fileName.c_str()))
   {
-    sendStdString(replies[12]);
+    sendStdString(k_reply_file_action_ok);
   }
   else
   {
-    sendStdString(replies[13]);
+    sendStdString(k_reply_action_not_taken);
   }
 #else
   cmdUnimplemented("RMD");
@@ -517,11 +529,11 @@ void ftpConnection::cmdRnto(std::string const &arg)
 #ifdef NXDK
   if (MoveFileA(rnfr.c_str(), fileName.c_str()))
   {
-    sendStdString(replies[12]);
+    sendStdString(k_reply_file_action_ok);
   }
   else
   {
-    sendStdString(replies[13]);
+    sendStdString(k_reply_action_not_taken);
   }
   rnfr = "";
 #else
@@ -533,10 +545,10 @@ void ftpConnection::cmdList(std::string const &arg)
 {
   if (dataFd != -1)
   {
-    sendStdString(replies[9]);
+    sendStdString(k_reply_opening_ascii_data_connection_for_ls);
     sendFolderContents(dataFd, pwd);
     close(dataFd);
-    sendStdString(replies[10]);
+    sendStdString(k_reply_data_transfer_finished_successfully);
   }
 }
 
@@ -544,10 +556,13 @@ void ftpConnection::cmdNlst(std::string const &arg)
 {
   if (dataFd != -1)
   {
-    sendStdString(replies[9]);
-    sendFolderContents(dataFd, pwd, true);
+    const std::string &path = (arg.empty() || arg == " ") ? pwd : arg;
+    outputLine("arg: '%s'", arg.c_str());
+    outputLine(" pwd: '%s'", pwd.c_str());
+    sendStdString(k_reply_opening_ascii_data_connection_for_ls);
+    sendFolderContents(dataFd, path, true);
     close(dataFd);
-    sendStdString(replies[10]);
+    sendStdString(k_reply_data_transfer_finished_successfully);
   }
 }
 
@@ -569,7 +584,7 @@ void ftpConnection::cmdEprt(std::string const &arg)
   dataFd = server->openConnection(address, port);
   if (dataFd != -1)
   {
-    sendStdString(replies[8]);
+    sendStdString(k_reply_port_command_ok);
   }
   else
   {
@@ -590,7 +605,7 @@ void ftpConnection::cmdRetr(std::string const &arg)
     sendStdString("150 Sending file " + arg + "\r\n");
     sendFile(fileName);
     close(dataFd);
-    sendStdString(replies[10]);
+    sendStdString(k_reply_data_transfer_finished_successfully);
   }
 }
 
@@ -607,14 +622,14 @@ void ftpConnection::cmdStor(std::string const &arg)
     sendStdString("150 Receiving file " + arg + "\r\n");
     recvFile(fileName);
     close(dataFd);
-    sendStdString(replies[10]);
+    sendStdString(k_reply_data_transfer_finished_successfully);
   }
 }
 
 void ftpConnection::cmdUnimplemented(std::string const &arg)
 {
-  sprintf(buf, replies[4].c_str(), arg.c_str());
-  sendStdString(buf);
+  sprintf(buf.get(), k_reply_not_implemented, arg.c_str());
+  sendStdString(buf.get());
 }
 
 std::string ftpConnection::unixToDosPath(std::string const &path)
@@ -633,27 +648,25 @@ std::string ftpConnection::unixToDosPath(std::string const &path)
   return ret;
 }
 
-void ftpConnection::sendFolderContents(int fd, std::string &path, bool just_files)
+void ftpConnection::sendFolderContents(int fd, const std::string &path, bool just_files)
 {
-  if (path[0] == '/' && path[1] == '/')
+  const std::string path_to_search = (path[0] == '/' && path[1] == '/') ? path.substr(1, std::string::npos) : path;
+  if (!path_to_search.compare("/"))
   {
-    path = path.substr(1, std::string::npos);
-  }
-  if (!path.compare("/"))
-  {
-    for (size_t i = 0; i < drives.length(); ++i)
+    for (const auto drive : k_drives)
     {
-      if (nxIsDriveMounted(drives[i]))
+      if (nxIsDriveMounted(drive))
       {
         const std::string preamble = just_files ? "" : "drwxr-xr-x 1 XBOX XBOX 0 2020-03-02 10:41 ";
-        sendStdString(fd, preamble + drives.substr(i, 1) + "\r\n");
+        sendStdString(fd, preamble + drive + "\r\n");
       }
     }
     return;
   }
 #ifdef NXDK
   WIN32_FIND_DATAA fData;
-  std::string searchmask = unixToDosPath(path + "*");
+  std::string searchmask = unixToDosPath(path_to_search + "*");
+  outputLine("path: '%s' path_to_search:'%s' searchmask: '%s'\n", path.c_str(), path_to_search.c_str(), searchmask.c_str());
   HANDLE fHandle = FindFirstFileA(searchmask.c_str(), &fData);
   if (fHandle == INVALID_HANDLE_VALUE)
   {
@@ -713,33 +726,32 @@ bool ftpConnection::sendFile(std::string const &fileName)
     outputLine("File opening failed. LOL.\n");
     return false;
   }
-  unsigned char *sendBuffer = (unsigned char *)malloc(FTP_DATA_BUFFER_SIZE);
-  if (sendBuffer == nullptr)
+  const std::unique_ptr<unsigned char[]> sendBuffer(new unsigned char[k_ftp_data_buffer_size]);
+  if (!sendBuffer)
   {
     outputLine("File sending buffer memory allocation failed.\n");
     return false;
   }
-  int bytesToRead = FTP_DATA_BUFFER_SIZE;
+  int bytesToRead = k_ftp_data_buffer_size;
   unsigned long bytesRead = 0;
   if (mode == 'I')
   {
-    while (ReadFile(fHandle, sendBuffer, bytesToRead, &bytesRead, NULL) && (bytesRead > 0))
+    while (ReadFile(fHandle, sendBuffer.get(), bytesToRead, &bytesRead, NULL) && (bytesRead > 0))
     {
-      send(dataFd, sendBuffer, bytesRead, 0);
+      send(dataFd, sendBuffer.get(), bytesRead, 0);
     }
   }
   else if (mode == 'A')
   {
     std::string abuf;
-    while (ReadFile(fHandle, sendBuffer, bytesToRead, &bytesRead, NULL) && (bytesRead > 0))
+    while (ReadFile(fHandle, sendBuffer.get(), bytesToRead, &bytesRead, NULL) && (bytesRead > 0))
     {
-      abuf = reinterpret_cast<char *>(sendBuffer);
+      abuf = reinterpret_cast<char *>(sendBuffer.get());
       std::for_each(abuf.begin(), abuf.begin() + bytesRead, [](char &c) { c &= 0x7F; });
       send(dataFd, abuf.c_str(), bytesRead, 0);
     }
   }
   CloseHandle(fHandle);
-  free(sendBuffer);
   return true;
 #else
   char trash[1024];
@@ -763,7 +775,7 @@ bool ftpConnection::recvFile(std::string const &fileName)
     return false;
   }
 #endif
-  unsigned char *recvBuffer = (unsigned char *)malloc(FTP_DATA_BUFFER_SIZE);
+  const std::unique_ptr<unsigned char[]> recvBuffer(new unsigned char[k_ftp_data_buffer_size]);
   if (!recvBuffer)
   {
     outputLine("Could not create buffer for file receiving! \n");
@@ -772,7 +784,7 @@ bool ftpConnection::recvFile(std::string const &fileName)
   outputLine(("\r\n" + filePath + "\r\n").c_str());
   unsigned long bytesWritten;
   ssize_t bytesRead;
-  while ((bytesRead = recv(dataFd, recvBuffer, FTP_DATA_BUFFER_SIZE, 0)))
+  while ((bytesRead = recv(dataFd, recvBuffer.get(), k_ftp_data_buffer_size, 0)))
   {
     if (bytesRead == -1)
     {
@@ -781,7 +793,7 @@ bool ftpConnection::recvFile(std::string const &fileName)
       break;
     }
 #ifdef NXDK
-    WriteFile(fHandle, recvBuffer, bytesRead, &bytesWritten, NULL);
+    WriteFile(fHandle, recvBuffer.get(), bytesRead, &bytesWritten, NULL);
     if (bytesWritten != bytesRead)
     {
       outputLine("ERROR: Bytes read != Bytes written (%d, %d)\n", bytesRead, bytesWritten);
@@ -792,6 +804,5 @@ bool ftpConnection::recvFile(std::string const &fileName)
 #ifdef NXDK
   CloseHandle(fHandle);
 #endif
-  free(recvBuffer);
   return retVal;
 }

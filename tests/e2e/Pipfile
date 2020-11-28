@@ -6,8 +6,11 @@ name = "pypi"
 [packages]
 pyxboxtest = {editable = true, path = "./../../../pyxboxtest"}
 gitpython = "*"
+python-git = "*"
 
 [dev-packages]
+pylint = "*"
+pytype = "*"
 
 [requires]
 python_version = "3.8"
