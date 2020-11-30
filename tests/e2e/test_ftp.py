@@ -174,18 +174,22 @@ def test_ftp_app_upload_download_data(
 
 
 class ListDirectoryParams(NamedTuple):
+    """Parameters used by tests for listing a directory"""
+
     list_directory: str
     expected_content: Tuple[str, ...]
 
 
 class MakeDirectoryParams(NamedTuple):
-    make_directories: Tuple[str, ...]
-    create_files: Tuple[str, ...]
+    """Parameters used by the tests for making a directory with some content"""
+
+    make_these_directories: Tuple[str, ...]
+    create_these_files: Tuple[str, ...]
     run_these_list_tests: Tuple[ListDirectoryParams, ...]
 
 
 @pytest.mark.parametrize(
-    "directories_to_make",
+    "make_these_directories,create_these_files,run_these_list_tests",
     (
         MakeDirectoryParams(
             ("C/test", "C/other"),
@@ -213,16 +217,19 @@ class MakeDirectoryParams(NamedTuple):
     ),
 )
 def test_make_and_list_directory(
-    ftp_client: FTP, directories_to_make: MakeDirectoryParams
+    ftp_client: FTP,
+    make_these_directories: Tuple[str, ...],
+    create_these_files: Tuple[str, ...],
+    run_these_list_tests: Tuple[ListDirectoryParams, ...],
 ):
     """Ensures that we can make directories and see them"""
-    for directory in directories_to_make.make_directories:
+    for directory in make_these_directories:
         ftp_client.mkd(directory)
 
-    for filename in directories_to_make.create_files:
+    for filename in create_these_files:
         ftp_upload_data(ftp_client, "", filename)
 
-    for list_test_to_run in directories_to_make.run_these_list_tests:
+    for list_test_to_run in run_these_list_tests:
         assert (
             tuple(ftp_client.nlst(list_test_to_run.list_directory))
             == list_test_to_run.expected_content
@@ -234,13 +241,13 @@ class DeleteFileParams(NamedTuple):
     was a success
     """
 
-    make_directories: Tuple[str, ...]
-    filenames: Tuple[str, ...]
-    directory_to_check: str
+    make_these_directories: Tuple[str, ...]
+    create_these_files: Tuple[str, ...]
+    check_this_directory: str
 
 
 @pytest.mark.parametrize(
-    "delete_file_params",
+    "make_these_directories,create_these_files,check_this_directory",
     (
         DeleteFileParams(tuple(), ("C/test.txt",), "/C/"),
         DeleteFileParams(tuple(), ("E/test2.txt",), "/E/"),
@@ -276,27 +283,33 @@ class DeleteFileParams(NamedTuple):
         ),
     ),
 )
-def test_delete_file(ftp_client: FTP, delete_file_params: DeleteFileParams):
-    for directory in delete_file_params.make_directories:
+def test_delete_file(
+    ftp_client: FTP,
+    make_these_directories: Tuple[str, ...],
+    create_these_files: Tuple[str, ...],
+    check_this_directory: str,
+):
+    """Ensure that files can be deleted and that no other files are deleted by
+    mistake
+    """
+    for directory in make_these_directories:
         ftp_client.mkd(directory)
 
-    for filename in delete_file_params.filenames:
+    for filename in create_these_files:
         ftp_upload_data(ftp_client, "", filename)
 
-    file_to_delete = random.choice(delete_file_params.filenames)
+    file_to_delete = random.choice(create_these_files)
 
     assert (
         tuple(
-            delete_file_params.directory_to_check.lstrip("/") + filename
-            for filename in ftp_client.nlst(delete_file_params.directory_to_check)
+            check_this_directory.lstrip("/") + filename
+            for filename in ftp_client.nlst(check_this_directory)
         )
-        == delete_file_params.filenames
+        == create_these_files
     ), "files exist"
 
     ftp_client.delete(file_to_delete)
 
-    assert ftp_client.nlst(delete_file_params.directory_to_check) == [
-        file.split("/")[-1]
-        for file in delete_file_params.filenames
-        if file != file_to_delete
+    assert ftp_client.nlst(check_this_directory) == [
+        file.split("/")[-1] for file in create_these_files if file != file_to_delete
     ], f"only {file_to_delete} has been deleted"
