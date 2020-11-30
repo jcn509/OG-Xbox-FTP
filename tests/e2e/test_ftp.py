@@ -235,17 +235,44 @@ class DeleteFileParams(NamedTuple):
     """
 
     make_directories: Tuple[str, ...]
-    filename: str
+    filenames: Tuple[str, ...]
     directory_to_check: str
 
 
 @pytest.mark.parametrize(
     "delete_file_params",
     (
-        DeleteFileParams(tuple(), "C/test.txt", "/C/"),
-        DeleteFileParams(tuple(), "E/test2.txt", "/E/"),
+        DeleteFileParams(tuple(), ("C/test.txt",), "/C/"),
+        DeleteFileParams(tuple(), ("E/test2.txt",), "/E/"),
         DeleteFileParams(
-            ("X/dir", "X/dir/dir2"), "X/dir/dir2/test2.txt", "/X/dir/dir2/"
+            ("X/dir", "X/dir/dir2"), ("X/dir/dir2/test2.txt",), "/X/dir/dir2/"
+        ),
+        DeleteFileParams(
+            tuple(),
+            (
+                "C/test.txt",
+                "C/test2.txt",
+                "C/test3.txt",
+            ),
+            "/C/",
+        ),
+        DeleteFileParams(
+            tuple(),
+            (
+                "E/test2.txt",
+                "E/somethingelse.bat",
+            ),
+            "/E/",
+        ),
+        DeleteFileParams(
+            ("X/dir", "X/dir/dir2"),
+            (
+                "X/dir/dir2/asdasd.asd",
+                "X/dir/dir2/dd.ss",
+                "X/dir/dir2/something.xbe",
+                "X/dir/dir2/noext",
+            ),
+            "/X/dir/dir2/",
         ),
     ),
 )
@@ -253,7 +280,23 @@ def test_delete_file(ftp_client: FTP, delete_file_params: DeleteFileParams):
     for directory in delete_file_params.make_directories:
         ftp_client.mkd(directory)
 
-    ftp_upload_data(ftp_client, "", delete_file_params.filename)
-    ftp_client.delete(delete_file_params.filename)
+    for filename in delete_file_params.filenames:
+        ftp_upload_data(ftp_client, "", filename)
 
-    assert ftp_client.nlst(delete_file_params.directory_to_check) == []
+    file_to_delete = random.choice(delete_file_params.filenames)
+
+    assert (
+        tuple(
+            delete_file_params.directory_to_check.lstrip("/") + filename
+            for filename in ftp_client.nlst(delete_file_params.directory_to_check)
+        )
+        == delete_file_params.filenames
+    ), "files exist"
+
+    ftp_client.delete(file_to_delete)
+
+    assert ftp_client.nlst(delete_file_params.directory_to_check) == [
+        file.split("/")[-1]
+        for file in delete_file_params.filenames
+        if file != file_to_delete
+    ], f"only {file_to_delete} has been deleted"
