@@ -491,10 +491,12 @@ void ftpConnection::cmdRmd(std::string const &arg)
   fileName = unixToDosPath(fileName);
   if (RemoveDirectoryA(fileName.c_str()))
   {
+    outputLine("Deleted directory: '%s'\n", fileName.c_str());
     sendStdString(k_reply_file_action_ok);
   }
   else
   {
+    outputLine("Failed to delete directory: '%s'\n", fileName.c_str());
     sendStdString(k_reply_action_not_taken);
   }
 #else
@@ -545,8 +547,9 @@ void ftpConnection::cmdList(std::string const &arg)
 {
   if (dataFd != -1)
   {
+    const std::string &path = (arg.empty() || arg == " ") ? pwd : arg;
     sendStdString(k_reply_opening_ascii_data_connection_for_ls);
-    sendFolderContents(dataFd, pwd);
+    sendFolderContents(dataFd, path);
     close(dataFd);
     sendStdString(k_reply_data_transfer_finished_successfully);
   }

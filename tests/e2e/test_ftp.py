@@ -313,3 +313,93 @@ def test_delete_file(
     assert ftp_client.nlst(check_this_directory) == [
         file.split("/")[-1] for file in create_these_files if file != file_to_delete
     ], f"only {file_to_delete} has been deleted"
+
+
+class DeleteDirectoryParams(NamedTuple):
+    """May need to make some directories if we are to be sure that the upload
+    was a success
+    """
+
+    make_these_directories: Tuple[str, ...]
+    create_these_files: Tuple[str, ...]
+    delete_this_directory: str
+
+
+def remove_ftp_dir(ftp: FTP, path: str) -> None:
+    """Deletes a directories contents (recursively) before then deletes the
+    directory itself
+    """
+    path = path.rstrip("/")
+    print("path:", path)
+    lines = []
+    ftp.retrlines(f"LIST {path}/", lines.append)
+    print("lines:", lines)
+
+    for line in lines:
+        components = line.split(" ")
+        name = " ".join(components[7:])
+        is_dir = components[0][0] == "d"
+        print(line, components)
+        print(name, is_dir)
+
+        if name in [".", ".."]:
+            continue
+        elif not is_dir:
+            ftp.delete(f"{path}/{name}")
+        else:
+            remove_ftp_dir(ftp, f"{path}/{name}")
+
+    ftp.rmd(path)
+
+
+@pytest.mark.parametrize(
+    "make_these_directories,create_these_files,delete_this_directory",
+    (
+        DeleteDirectoryParams(("/C/test/",), tuple(), "/C/test"),
+        DeleteDirectoryParams(("/C/test/",), ("C/test/file.txt",), "/C/test"),
+        DeleteDirectoryParams(
+            ("/E/dir/", "/E/otherdir/"), ("E/dir/sd.txt", "E/dir/sd2.bat"), "/E/dir"
+        ),
+        DeleteDirectoryParams(
+            ("/X/test/", "/x/test/test2/"),
+            tuple(),
+            "/X/test/test2",
+        ),
+        DeleteDirectoryParams(
+            ("/X/test/", "/x/test/test2/"),
+            ("X/test/sd.txt", "x/test/test2/sd2.bat"),
+            "/X/test/test2",
+        ),
+    ),
+)
+def test_delete_directory(
+    ftp_client: FTP,
+    make_these_directories: Tuple[str, ...],
+    create_these_files: Tuple[str, ...],
+    delete_this_directory: str,
+):
+    """Ensure that files can be deleted and that no other files are deleted by
+    mistake
+    """
+    for directory in make_these_directories:
+        ftp_client.mkd(directory)
+
+    for filename in create_these_files:
+        ftp_upload_data(ftp_client, "", filename)
+
+    check_this_directory = (
+        "/".join(delete_this_directory.rstrip("/").split("/")[:-1]) + "/"
+    )
+    print(check_this_directory)
+    content_before = ftp_client.nlst(check_this_directory)
+    assert (
+        delete_this_directory.replace(check_this_directory, "") in content_before
+    ), f"directory {delete_this_directory} exists"
+
+    remove_ftp_dir(ftp_client, delete_this_directory)
+
+    assert ftp_client.nlst(check_this_directory) == [
+        f
+        for f in content_before
+        if f != delete_this_directory.replace(check_this_directory, "")
+    ], f"directory {delete_this_directory} has been deleted"
