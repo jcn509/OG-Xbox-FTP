@@ -352,6 +352,11 @@ def remove_ftp_dir(ftp: FTP, path: str) -> None:
     ftp.rmd(path)
 
 
+def get_parent_directory_name(path: str) -> str:
+    """:returns: the path of the containing directory"""
+    return "/".join(path.rstrip("/").split("/")[:-1]) + "/"
+
+
 @pytest.mark.parametrize(
     "make_these_directories,create_these_files,delete_this_directory",
     (
@@ -378,8 +383,8 @@ def test_delete_directory(
     create_these_files: Tuple[str, ...],
     delete_this_directory: str,
 ):
-    """Ensure that files can be deleted and that no other files are deleted by
-    mistake
+    """Ensure that directories can be deleted and that no other directories or
+    files are deleted by mistake
     """
     for directory in make_these_directories:
         ftp_client.mkd(directory)
@@ -390,7 +395,7 @@ def test_delete_directory(
     check_this_directory = (
         "/".join(delete_this_directory.rstrip("/").split("/")[:-1]) + "/"
     )
-    print(check_this_directory)
+
     content_before = ftp_client.nlst(check_this_directory)
     assert (
         delete_this_directory.replace(check_this_directory, "") in content_before
@@ -403,3 +408,85 @@ def test_delete_directory(
         for f in content_before
         if f != delete_this_directory.replace(check_this_directory, "")
     ], f"directory {delete_this_directory} has been deleted"
+
+
+class RenameFileParams(NamedTuple):
+    """All data needed to test that a file can be renamed
+
+    This class exists for type checking purposes only
+    """
+
+    make_these_directories: Tuple[str, ...]
+    create_these_files: Tuple[str, ...]
+    old_filename: str
+    new_filename: str
+
+
+@pytest.mark.parametrize(
+    "make_these_directories,create_these_files,old_filename,new_filename",
+    (
+        RenameFileParams(tuple(), ("/C/test",), "/C/test", "/C/test2"),
+        RenameFileParams(tuple(), ("/E/a.cpp",), "/E/a.cpp", "/E/b.py"),
+        RenameFileParams(
+            ("/C/somedir/",),
+            ("/C/test", "/C/source.c", "/C/somedir/file"),
+            "/C/test",
+            "/C/test2",
+        ),
+        RenameFileParams(
+            ("/C/somedir/",),
+            ("/C/test", "/C/source.c", "/C/somedir/file"),
+            "/C/test",
+            "/C/somedir/file.txt",
+        ),
+        RenameFileParams(tuple(), ("/C/test",), "/C/test", "/E/test2"),
+        RenameFileParams(tuple(), ("/E/some.txt",), "/E/some.txt", "/X/some.bat"),
+        RenameFileParams(
+            ("/X/subdir/",), ("/E/some.txt",), "/E/some.txt", "/X/subdir/some.bat"
+        ),
+    ),
+)
+def test_rename_file(
+    ftp_client: FTP,
+    make_these_directories: Tuple[str, ...],
+    create_these_files: Tuple[str, ...],
+    old_filename: str,
+    new_filename: str,
+):
+    """Ensure that files can be renamed"""
+    for directory in make_these_directories:
+        ftp_client.mkd(directory)
+
+    for filename in create_these_files:
+        ftp_upload_data(ftp_client, "", filename)
+
+    old_file_directory = get_parent_directory_name(old_filename)
+    old_directory_content_before = ftp_client.nlst(old_file_directory)
+    assert (
+        old_filename.replace(old_file_directory, "") in old_directory_content_before
+    ), f"file {old_filename} exists in {old_file_directory}"
+
+    new_file_directory = get_parent_directory_name(new_filename)
+    new_directory_content_before = ftp_client.nlst(new_file_directory)
+    assert (
+        new_filename not in new_directory_content_before
+    ), f"{new_filename} not originally in {new_file_directory}"
+
+    copying_to_same_dir = old_file_directory == new_file_directory
+
+    ftp_client.rename(old_filename, new_filename)
+
+    old_directory_content_after = ftp_client.nlst(old_file_directory)
+    assert (
+        old_filename.replace(old_file_directory, "") not in old_directory_content_after
+    ), f"file {old_filename} no longer in {old_file_directory}"
+
+    assert sorted(ftp_client.nlst(new_file_directory)) == sorted(
+        [new_filename.replace(new_file_directory, "")]
+        + [
+            f
+            for f in new_directory_content_before
+            if not copying_to_same_dir
+            or f != old_filename.replace(old_file_directory, "")
+        ]
+    ), f"{old_filename} has been renamed to {new_filename}"
