@@ -12,6 +12,3 @@ pytest-xdist = {extras = ["psutil"], version = "*"}
 [dev-packages]
 pylint = "*"
 pytype = "*"
-
-[requires]
-python_version = "3.8"

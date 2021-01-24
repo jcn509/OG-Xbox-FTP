@@ -400,14 +400,14 @@ void ftpConnection::cmdCwd(std::string const &arg)
 
 void ftpConnection::cmdDele(std::string const &arg)
 {
-  std::string fileName = arg;
+  std::string filename = arg;
   if (arg[0] != '/')
   {
-    fileName = pwd + arg;
+    filename = pwd + arg;
   }
 #ifdef NXDK
-  fileName = unixToDosPath(fileName);
-  if (DeleteFile(fileName.c_str()))
+  filename = unixToDosPath(filename);
+  if (DeleteFile(filename.c_str()))
   {
     sendStdString(k_reply_file_action_ok);
   }
@@ -461,13 +461,13 @@ void ftpConnection::cmdPort(std::string const &arg)
 void ftpConnection::cmdMkd(std::string const &arg)
 {
 #ifdef NXDK
-  std::string fileName = arg;
+  std::string filename = arg;
   if (arg[0] != '/')
   {
-    fileName = pwd + arg;
+    filename = pwd + arg;
   }
-  fileName = unixToDosPath(fileName);
-  if (CreateDirectoryA(fileName.c_str(), NULL))
+  filename = unixToDosPath(filename);
+  if (CreateDirectoryA(filename.c_str(), NULL))
   {
     sendStdString(k_reply_file_action_ok);
   }
@@ -483,20 +483,20 @@ void ftpConnection::cmdMkd(std::string const &arg)
 void ftpConnection::cmdRmd(std::string const &arg)
 {
 #ifdef NXDK
-  std::string fileName = arg;
+  std::string filename = arg;
   if (arg[0] != '/')
   {
-    fileName = pwd + arg;
+    filename = pwd + arg;
   }
-  fileName = unixToDosPath(fileName);
-  if (RemoveDirectoryA(fileName.c_str()))
+  filename = unixToDosPath(filename);
+  if (RemoveDirectoryA(filename.c_str()))
   {
-    outputLine("Deleted directory: '%s'\n", fileName.c_str());
+    outputLine("Deleted directory: '%s'\n", filename.c_str());
     sendStdString(k_reply_file_action_ok);
   }
   else
   {
-    outputLine("Failed to delete directory: '%s'\n", fileName.c_str());
+    outputLine("Failed to delete directory: '%s'\n", filename.c_str());
     sendStdString(k_reply_action_not_taken);
   }
 #else
@@ -515,6 +515,7 @@ void ftpConnection::cmdRnfr(std::string const &arg)
   {
     rnfr = arg;
   }
+  rnfr = unixToDosPath(rnfr);
   sendStdString("350 File action pending further information.\r\n");
 #else
   cmdUnimplemented("RNFR");
@@ -523,13 +524,15 @@ void ftpConnection::cmdRnfr(std::string const &arg)
 
 void ftpConnection::cmdRnto(std::string const &arg)
 {
-  std::string fileName = arg;
+  std::string filename = arg;
   if (arg[0] != '/')
   {
-    fileName = pwd + arg;
+    filename = pwd + arg;
   }
+  filename = unixToDosPath(filename);
+  outputLine("Moving: '%s' to '%s'\n", rnfr.c_str(), filename.c_str());
 #ifdef NXDK
-  if (MoveFileA(rnfr.c_str(), fileName.c_str()))
+  if (MoveFileA(rnfr.c_str(), filename.c_str()))
   {
     sendStdString(k_reply_file_action_ok);
   }
@@ -599,14 +602,14 @@ void ftpConnection::cmdRetr(std::string const &arg)
 {
   if (dataFd != -1)
   {
-    std::string fileName = arg;
+    std::string filename = arg;
     if (arg[0] != '/')
     {
-      fileName = pwd + arg;
+      filename = pwd + arg;
     }
-    outputLine("Trying to send file %s!\n", fileName.c_str());
+    outputLine("Trying to send file %s!\n", filename.c_str());
     sendStdString("150 Sending file " + arg + "\r\n");
-    sendFile(fileName);
+    sendFile(filename);
     close(dataFd);
     sendStdString(k_reply_data_transfer_finished_successfully);
   }
@@ -616,14 +619,14 @@ void ftpConnection::cmdStor(std::string const &arg)
 {
   if (dataFd != -1)
   {
-    std::string fileName = arg;
+    std::string filename = arg;
     if (arg[0] != '/')
     {
-      fileName = pwd + arg;
+      filename = pwd + arg;
     }
-    outputLine("Trying to receive file %s!\n", fileName.c_str());
+    outputLine("Trying to receive file %s!\n", filename.c_str());
     sendStdString("150 Receiving file " + arg + "\r\n");
-    recvFile(fileName);
+    recvFile(filename);
     close(dataFd);
     sendStdString(k_reply_data_transfer_finished_successfully);
   }
@@ -717,10 +720,10 @@ void ftpConnection::sendFolderContents(int fd, const std::string &path, bool jus
 #endif
 }
 
-bool ftpConnection::sendFile(std::string const &fileName)
+bool ftpConnection::sendFile(std::string const &filename)
 {
 #ifdef NXDK
-  std::string filePath = unixToDosPath(fileName);
+  std::string filePath = unixToDosPath(filename);
   HANDLE fHandle = CreateFile(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   outputLine(("\n" + filePath + "\n").c_str());
@@ -764,10 +767,10 @@ bool ftpConnection::sendFile(std::string const &fileName)
 #endif
 }
 
-bool ftpConnection::recvFile(std::string const &fileName)
+bool ftpConnection::recvFile(std::string const &filename)
 {
   bool retVal = true;
-  std::string filePath = unixToDosPath(fileName);
+  std::string filePath = unixToDosPath(filename);
 #ifdef NXDK
   HANDLE fHandle = CreateFile(filePath.c_str(), GENERIC_WRITE,
                               0, NULL, CREATE_ALWAYS,
