@@ -422,6 +422,7 @@ class RenameParams(NamedTuple):
     new_name: str
 
 
+# TODO: test renaming directories
 @pytest.mark.parametrize(
     "make_these_directories,create_these_files,old_name,new_name",
     (
